@@ -1,0 +1,13 @@
+{
+  "name": "land-registry",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "truffle:compile": "truffle compile",
+    "truffle:migrate": "truffle migrate --reset --network development",
+    "postmigrate": "node scripts/postmigrate.js"
+  },
+  "devDependencies": {
+    "truffle": "^5.11.5"
+  }
+}

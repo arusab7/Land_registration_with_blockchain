@@ -1,0 +1,378 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Land Registration - Blockchain Demo (single file)</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:18px;background:#f6f8fa}
+    .card{background:#fff;padding:12px;border-radius:8px;box-shadow:0 2px 6px rgba(20,20,30,0.08);margin-bottom:12px}
+    h2{margin:4px 0 10px}
+    input,select,button,textarea{padding:8px;margin:6px 0;width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:6px}
+    .row{display:grid;grid-template-columns:1fr 320px;gap:12px}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #eee;padding:6px;text-align:left}
+    .small{font-size:12px;color:#555}
+    .btn{cursor:pointer;background:#2563eb;color:#fff;border:none;padding:8px 10px;border-radius:6px}
+    .muted{color:#666;font-size:13px}
+    pre{white-space:pre-wrap;word-wrap:break-word;background:#f3f4f6;padding:8px;border-radius:6px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Blockchain-Based Land Registration — Demo (Single file)</h2>
+    <div class="small">No installs. Everything runs in your browser. Blockchain = simple append-only chain with SHA-256 hashing for integrity.</div>
+  </div>
+
+  <div class="row">
+    <div>
+      <div class="card" id="authCard">
+        <h3>Authentication</h3>
+        <div id="authForms">
+          <div id="loginForm">
+            <input id="loginEmail" placeholder="Email">
+            <input id="loginPass" placeholder="Password" type="password">
+            <button class="btn" onclick="login()">Login</button>
+            <div style="height:8px"></div>
+            <button onclick="showRegister()" style="background:#10b981;color:#fff;border:none;padding:6px 10px;border-radius:6px">Register</button>
+          </div>
+          <div id="registerForm" style="display:none">
+            <input id="regName" placeholder="Full name">
+            <input id="regEmail" placeholder="Email">
+            <select id="regRole">
+              <option value="buyer">Buyer</option>
+              <option value="seller">Seller</option>
+            </select>
+            <input id="regPass" placeholder="Password" type="password">
+            <button class="btn" onclick="register()">Create account</button>
+            <div style="height:8px"></div>
+            <button onclick="showLogin()" style="background:#ef4444;color:#fff;border:none;padding:6px 10px;border-radius:6px">Back to login</button>
+          </div>
+        </div>
+        <div id="loggedIn" style="display:none">
+          <div class="muted">Logged in as <b id="who"></b> (<span id="whoRole"></span>)</div>
+          <div style="height:8px"></div>
+          <button class="btn" onclick="logout()">Logout</button>
+        </div>
+      </div>
+
+      <div class="card" id="sellerCard" style="display:none">
+        <h3>Seller Dashboard</h3>
+        <div class="muted">Add Land (requires inspector verification first)</div>
+        <input id="landTitle" placeholder="Title (e.g., Plot A)">
+        <textarea id="landDesc" placeholder="Details / address"></textarea>
+        <input id="landPrice" placeholder="Price (simulate tokens)">
+        <button class="btn" onclick="addLand()">Add Land</button>
+        <hr>
+        <h4>Your Lands</h4>
+        <div id="sellerLands"></div>
+      </div>
+
+      <div class="card" id="buyerCard" style="display:none">
+        <h3>Buyer Dashboard</h3>
+        <div class="muted">Available lands</div>
+        <div id="availableLands"></div>
+        <hr>
+        <h4>Your Owned Lands</h4>
+        <div id="ownedLands"></div>
+      </div>
+
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>Inspector (Admin)</h3>
+        <div class="muted">Inspector can verify users and finalize transfers</div>
+        <div style="height:8px"></div>
+        <button class="btn" onclick="impersonateInspector()">Use Inspector Account</button>
+        <div style="height:8px"></div>
+        <div><b>Pending Verifications</b></div>
+        <div id="pendingUsers"></div>
+        <div style="height:8px"></div>
+        <div><b>Pending Ownership Transfers</b></div>
+        <div id="pendingTransfers"></div>
+      </div>
+
+      <div class="card">
+        <h3>Blockchain Viewer</h3>
+        <div class="muted">Immutable record history (each block contains transactions)</div>
+        <button class="btn" onclick="renderChain()">View Blockchain</button>
+        <div id="chainView" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card">
+        <h3>Utility</h3>
+        <div class="small">Reset demo (clears localStorage)</div>
+        <button onclick="resetDemo()" style="background:#ef4444;color:#fff;border:none;padding:8px;border-radius:6px">Reset Demo</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/*
+  Simple in-browser blockchain demo implementing core flows described:
+  - Users: buyer, seller, inspector(admin)
+  - Inspector verifies users
+  - Verified seller adds lands
+  - Buyer requests land -> seller approves -> buyer pays -> inspector finalizes transfer
+  - All important actions appended to chain as blocks (SHA-256)
+*/
+
+// tiny helpers
+const $ = id=>document.getElementById(id);
+
+// init demo state or load from localStorage
+let state = JSON.parse(localStorage.getItem('land_demo_state') || 'null') || {
+  users: {}, // email -> {name,email,role,pass,verified,owned:[]}
+  lands: {}, // landId -> {id,title,desc,price,seller,owner,verified}
+  requests: {}, // reqId -> {id,landId,buyer,status}
+  chain: [] // blocks
+};
+
+const inspectorAccount = { email:'inspector@gov.in', name:'Land Inspector', role:'inspector', pass:'inspect123', verified:true };
+
+// ensure inspector exists
+if(!state.users[inspectorAccount.email]) state.users[inspectorAccount.email]=Object.assign({},inspectorAccount, {owned:[]});
+
+// simple SHA256 using SubtleCrypto, returns hex
+async function sha256hex(msg){
+  const enc = new TextEncoder();
+  const data = enc.encode(msg);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+// Block & chain functions
+async function createBlock(transactions){
+  const prev = state.chain.length? state.chain[state.chain.length-1].hash : '0'.repeat(64);
+  const timestamp = new Date().toISOString();
+  const payload = JSON.stringify({ transactions, prev, timestamp });
+  const hash = await sha256hex(payload);
+  const block = { index: state.chain.length, timestamp, transactions, prev, hash };
+  state.chain.push(block);
+  persist();
+  return block;
+}
+
+function persist(){ localStorage.setItem('land_demo_state', JSON.stringify(state)); renderUI(); }
+
+// seed genesis block if empty
+(async ()=>{ if(state.chain.length===0){ await createBlock([{type:'genesis', info:'Land Registration Demo Genesis'}]); } renderUI(); })();
+
+// UI rendering & auth
+let currentUser = null;
+function showRegister(){ $('loginForm').style.display='none'; $('registerForm').style.display='block'; }
+function showLogin(){ $('registerForm').style.display='none'; $('loginForm').style.display='block'; }
+function login(){
+  const e=$('loginEmail').value.trim(), p=$('loginPass').value;
+  if(!e||!p){ alert('enter email & password'); return; }
+  const u = state.users[e];
+  if(!u || u.pass !== p){ alert('invalid creds'); return; }
+  currentUser = u; $('authForms').style.display='none'; $('loggedIn').style.display='block'; $('who').innerText=u.name; $('whoRole').innerText=u.role;
+  renderUI();
+}
+function logout(){ currentUser=null; $('authForms').style.display='block'; $('loggedIn').style.display='none'; $('loginEmail').value=''; $('loginPass').value=''; renderUI(); }
+function register(){
+  const name=$('regName').value.trim(), email=$('regEmail').value.trim(), role=$('regRole').value, pass=$('regPass').value;
+  if(!name||!email||!pass){ alert('fill all'); return; }
+  if(state.users[email]){ alert('user exists'); return; }
+  state.users[email] = { name, email, role, pass, verified:false, owned:[] };
+  createBlock([{type:'user_registered', user:email, role}]);
+  persist();
+  alert('Registered. Wait for inspector verification (use inspector account to verify).');
+  showLogin();
+}
+function impersonateInspector(){
+  currentUser = state.users[inspectorAccount.email];
+  $('authForms').style.display='none'; $('loggedIn').style.display='block'; $('who').innerText=currentUser.name; $('whoRole').innerText=currentUser.role;
+  renderUI();
+}
+
+// seller functions
+async function addLand(){
+  if(!currentUser || currentUser.role!=='seller'){ alert('login as seller'); return; }
+  if(!currentUser.verified){ alert('wait until inspector verifies your account'); return; }
+  const title=$('landTitle').value.trim(), desc=$('landDesc').value.trim(), price=$('landPrice').value.trim();
+  if(!title||!price){ alert('enter title and price'); return; }
+  const id = 'L'+Date.now();
+  state.lands[id] = { id, title, desc, price, seller: currentUser.email, owner: currentUser.email, verified:false };
+  await createBlock([{type:'land_added', land:id, seller:currentUser.email, title}]);
+  persist();
+  alert('Land added. Ask inspector to verify land listing.');
+  $('landTitle').value=''; $('landDesc').value=''; $('landPrice').value='';
+}
+
+// buyer actions
+async function requestLand(landId){
+  if(!currentUser || currentUser.role!=='buyer'){ alert('login as buyer'); return; }
+  const land = state.lands[landId];
+  if(!land){ alert('invalid land'); return; }
+  const reqId = 'R'+Date.now();
+  state.requests[reqId] = { id:reqId, landId, buyer:currentUser.email, status:'requested' };
+  await createBlock([{type:'land_requested', request:reqId, land:landId, buyer:currentUser.email}]);
+  persist();
+  alert('Request sent to seller.');
+}
+async function approveRequest(reqId){
+  const req = state.requests[reqId];
+  if(!req) return alert('no req');
+  if(!currentUser || currentUser.email !== state.lands[req.landId].seller) return alert('only seller can approve');
+  req.status='approved_by_seller';
+  await createBlock([{type:'request_approved_by_seller', request:reqId}]);
+  persist();
+  alert('Seller approved. Buyer may make payment (simulated).');
+}
+async function makePayment(reqId){
+  if(!currentUser || currentUser.role!=='buyer') return alert('login as buyer');
+  const req = state.requests[reqId];
+  if(!req || req.buyer !== currentUser.email) return alert('invalid request');
+  if(req.status !== 'approved_by_seller') return alert('seller must approve first');
+  req.status = 'paid';
+  await createBlock([{type:'payment_made', request:reqId, by:currentUser.email}]);
+  persist();
+  alert('Payment recorded (simulated). Inspector must finalize transfer.');
+}
+
+// inspector functions
+async function verifyUser(email){
+  const u = state.users[email];
+  if(!u) return alert('no such user');
+  u.verified = true;
+  await createBlock([{type:'user_verified', user:email, by:inspectorAccount.email}]);
+  persist();
+  alert('User verified.');
+}
+async function verifyLand(landId){
+  const l = state.lands[landId];
+  if(!l) return alert('no land');
+  l.verified = true;
+  await createBlock([{type:'land_verified', land:landId, by:inspectorAccount.email}]);
+  persist();
+  alert('Land verified.');
+}
+async function finalizeTransfer(reqId){
+  const req = state.requests[reqId];
+  if(!req) return alert('no req');
+  if(req.status !== 'paid') return alert('payment not completed');
+  const land = state.lands[req.landId];
+  // transfer
+  const prevOwner = land.owner;
+  land.owner = req.buyer;
+  if(!state.users[req.buyer].owned) state.users[req.buyer].owned = [];
+  state.users[req.buyer].owned.push(land.id);
+  // remove from previous owner's owned list
+  state.users[prevOwner].owned = (state.users[prevOwner].owned || []).filter(x=>x!==land.id);
+  req.status = 'completed';
+  await createBlock([{type:'ownership_transferred', land:land.id, from:prevOwner, to:req.buyer, by:inspectorAccount.email}]);
+  persist();
+  alert('Ownership transferred and recorded on blockchain.');
+}
+
+// UI render helpers
+function renderUI(){
+  // show/hide dashboards
+  $('sellerCard').style.display = currentUser && currentUser.role==='seller' ? 'block':'none';
+  $('buyerCard').style.display = currentUser && currentUser.role==='buyer' ? 'block':'none';
+  // pending verifications for inspector
+  $('pendingUsers').innerHTML = '';
+  for(const e in state.users){
+    const u = state.users[e];
+    if(u.role!=='inspector' && !u.verified){
+      const div = document.createElement('div');
+      div.innerHTML = <b>${u.name}</b> (${u.role}) — ${u.email} <button onclick="verifyUser('${u.email}')" style="margin-left:8px">Verify</button>;
+      $('pendingUsers').appendChild(div);
+    }
+  }
+  // pending transfers (requests needing inspector)
+  $('pendingTransfers').innerHTML='';
+  for(const r in state.requests){
+    const req = state.requests[r];
+    if(req.status==='paid'){
+      const div = document.createElement('div');
+      div.innerHTML = Request <b>${req.id}</b> for land <b>${req.landId}</b> by ${req.buyer} <button onclick="finalizeTransfer('${req.id}')">Finalize</button>;
+      $('pendingTransfers').appendChild(div);
+    }
+  }
+
+  // seller lands if logged seller
+  $('sellerLands').innerHTML = '';
+  if(currentUser && currentUser.role==='seller'){
+    for(const lid in state.lands){
+      const l=state.lands[lid];
+      if(l.seller===currentUser.email){
+        const div = document.createElement('div');
+        div.innerHTML = <b>${l.title}</b> (ID:${l.id}) — Price:${l.price} — Verified:${l.verified}<div class="small">${l.desc || ''}</div>;
+        $('sellerLands').appendChild(div);
+      }
+    }
+  }
+
+  // available lands for buyers
+  $('availableLands').innerHTML='';
+  for(const lid in state.lands){
+    const l=state.lands[lid];
+    // show only verified lands (inspector verified)
+    const card = document.createElement('div');
+    card.style.borderBottom='1px solid #eee'; card.style.padding='6px 0';
+    card.innerHTML = <b>${l.title}</b> (ID:${l.id}) — Price:${l.price} — Seller:${l.seller} — Verified:${l.verified} <div class="small">${l.desc||''}</div>;
+    if(currentUser && currentUser.role==='buyer'){
+      const btn = document.createElement('button'); btn.className='btn'; btn.style.width='auto'; btn.style.marginTop='6px';
+      btn.innerText='Request';
+      btn.onclick = ()=>requestLand(l.id);
+      card.appendChild(btn);
+    }
+    $('availableLands').appendChild(card);
+  }
+
+  // owned lands
+  $('ownedLands').innerHTML='';
+  if(currentUser){
+    const owned = state.users[currentUser.email].owned || [];
+    if(owned.length===0) $('ownedLands').innerHTML = '<div class="small">No owned lands</div>';
+    owned.forEach(id=>{
+      const l = state.lands[id];
+      const div = document.createElement('div');
+      div.innerHTML = <b>${l.title}</b> (ID:${l.id}) — Seller:${l.seller};
+      $('ownedLands').appendChild(div);
+    });
+  }
+
+  // display pending seller approvals for seller (requests to approve)
+  if(currentUser && currentUser.role==='seller'){
+    const approvals = Object.values(state.requests).filter(r=> state.lands[r.landId].seller===currentUser.email && r.status==='requested');
+    approvals.forEach(r=>{
+      const div = document.createElement('div');
+      div.innerHTML = <div style="margin-top:6px">Request <b>${r.id}</b> for <b>${r.landId}</b> by ${r.buyer} <button onclick="approveRequest('${r.id}')" style="margin-left:8px">Approve</button></div>;
+      $('sellerLands').appendChild(div);
+    });
+  }
+
+  // buyer pending payments
+  if(currentUser && currentUser.role==='buyer'){
+    const pend = Object.values(state.requests).filter(r=> r.buyer===currentUser.email && r.status==='approved_by_seller');
+    pend.forEach(r=>{
+      const div = document.createElement('div');
+      div.innerHTML = <div style="margin-top:6px">Request <b>${r.id}</b> for <b>${r.landId}</b> — <button onclick="makePayment('${r.id}')">Make Payment (simulate)</button></div>;
+      $('ownedLands').appendChild(div);
+    });
+  }
+}
+
+async function renderChain(){
+  const el = $('chainView'); el.innerHTML='';
+  for(const b of state.chain){
+    const block = document.createElement('div'); block.className='card';
+    block.innerHTML = `<b>Block #${b.index}</b> <div class="small">${b.timestamp}</div>
+      <div class="small">Prev: ${b.prev}</div>
+      <div style="height:6px"></div>
+      <div><b>Transactions:</b><pre>${JSON.stringify(b.transactions,null,2)}</pre></div>
+      <div class="small">Hash: ${b.hash}</div>`;
+    el.appendChild(block);
+  }
+}
+
+// reset demo
+function resetDemo(){ if(!confirm('Clear demo state?')) return; localStorage.removeItem('land_demo_state'); location.reload(); }
+
+</script>
+</body>
+</html

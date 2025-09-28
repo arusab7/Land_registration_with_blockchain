@@ -100,7 +100,7 @@ Payment: Buyer completes payment via blockchain transaction.
 
 Ownership Transfer: Land Inspector confirms and records the transfer on blockchain.
 
-✅ Benefits
+Benefits
 
 Fraud Prevention – Immutable blockchain records prevent tampering.
 
